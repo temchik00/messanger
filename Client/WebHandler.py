@@ -1,8 +1,8 @@
 import socket
 import rsa
 import os
-import time
 import enum
+import json
 
 
 class Commands(enum.Enum):
@@ -45,7 +45,8 @@ class Client:
 
     def __load_keys__(self):
         with open("./keys/public_key.PEM", "rb") as file:
-            self.public_key = rsa.PublicKey.load_pkcs1(file.read())
+            key = file.read()
+            self.public_key = rsa.PublicKey.load_pkcs1(key)
 
         with open("./keys/private_key.PEM", "rb") as file:
             self.private_key = rsa.PrivateKey.load_pkcs1(file.read())
@@ -81,18 +82,21 @@ class Client:
             print("Failed to sign in")
 
     def get_all_dialogs(self):
-        pass
+        self.client_socket.sendall(bytes([Commands.get_dialogs.value]))
+        encrypted_dialogs_info = self.client_socket.recv(SIZE)
+        dialogs_info = rsa.decrypt(encrypted_dialogs_info, self.private_key).decode('utf-16')
+        dialogs_info = json.loads(dialogs_info)
+        return dialogs_info
 
     def end_session(self):
         self.client_socket.close()
 
+
 if __name__ == "__main__":
     c = Client("", 8080)
-    c.register("login", "password")
-    c.register("login", "password")
-    c.register("login", "password")
     c.register("Asd", "password")
     c.auth("Asd", "password")
+    print(c.get_all_dialogs())
     c.end_session()
 
 

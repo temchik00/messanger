@@ -2,13 +2,19 @@ import socket
 import threading
 import rsa
 import pymongo
+import json
 
 
 SIZE = 2048
 
 
 # certificates: {login:str, password:str, public_key:binary, chats:[int], dialogs:[int]}
-# dialogs: {id: int, persons: [string], messages: {id: int, author: string, content: string}}
+
+# dialogs_info: {id: int, persons: [string]}
+# dialogs_messages: {dialog_id: int, id: int, author: string, content: string, content_type: int}
+
+# chats_info: {id: int, persons: [string], title: string, key: binary}
+# chats_messages: {chat_id: int, id: int, author: string, content: string, content_type: int}
 
 
 class Session:
@@ -28,10 +34,12 @@ class Session:
             self.get_dialogs,
             self.get_chats
         ]
+        self.user = None
         self.client = client
         self.address = address
         self.db_client = pymongo.MongoClient('localhost', port=27017)
         self.database = self.db_client['Database']
+        self.public_key = None
 
     def start(self):
         while True:
@@ -42,7 +50,8 @@ class Session:
                         self.commands[data[0]]()
                 else:
                     raise socket.error('Client disconnected')
-            except:
+            except BaseException as error:
+                print(error)
                 self.client.close()
                 return False
 
@@ -52,10 +61,13 @@ class Session:
         login = self.client.recv(SIZE).decode('utf16')
         self.client.sendall(bytes([0]))
         password = self.client.recv(SIZE).decode('utf16')
-        if certificates.find_one({"login": login, "password": password}) is None:
+        user = certificates.find_one({"login": login, "password": password})
+        if user is None:
             self.client.sendall(bytes([1]))
             return
         else:
+            self.public_key = rsa.PublicKey.load_pkcs1(user['public_key'])
+            self.user = user
             self.client.sendall(bytes([0]))
 
     def register(self):
@@ -70,7 +82,6 @@ class Session:
         self.client.sendall(bytes([0]))
         key = self.client.recv(SIZE)
         certificates.insert_one({"login": login, "password": password, "public_key": key, "chats": [], "dialogs": []})
-        print('updated')
         return
 
     def open_dialog(self):
@@ -107,7 +118,11 @@ class Session:
         pass
 
     def get_dialogs(self):
-        pass
+        dialog_ids = self.database['Certificates'].find_one({'login': self.user['login']})['dialogs']
+        dialogs = self.database['DialogsInfo'].find({'login': {'$in': dialog_ids}})
+        dialogs = json.dumps(list(dialogs)).encode("utf16")
+        encrypted = rsa.encrypt(dialogs, self.public_key)
+        self.client.sendall(encrypted)
 
     def get_chats(self):
         pass
