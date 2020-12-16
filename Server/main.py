@@ -5,14 +5,14 @@ import pymongo
 
 
 SIZE = 2048
-class ThreadedServer(object):
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
-        self.db = pymongo.MongoClient('localhost', port=27017)['Database']
-        self.certificates = self.db['Certificates']
-        # self.certificates = {} #{login:{password:... public_key:... chats:[] dialogs:[]}}
-        self.chats = {} #{chat_id: {messages:[], public_key:... private_key:...}}
+
+
+# certificates: {login:str, password:str, public_key:binary, chats:[int], dialogs:[int]}
+# dialogs: {id: int, persons: [string], messages: {id: int, author: string, content: string}}
+
+
+class Session:
+    def __init__(self, client, address):
         self.commands = [
             self.auth,
             self.register,
@@ -24,49 +24,51 @@ class ThreadedServer(object):
             self.create_chat,
             self.add_to_chat,
             self.close_chat,
-            self.close_dialog
+            self.close_dialog,
+            self.get_dialogs,
+            self.get_chats
         ]
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((self.host, self.port))
+        self.client = client
+        self.address = address
+        self.db_client = pymongo.MongoClient('localhost', port=27017)
+        self.database = self.db_client['Database']
 
-    def listen(self):
-        self.sock.listen(10)
-        while True:
-            client, address = self.sock.accept()
-            client.settimeout(60)
-            threading.Thread(target=self.listenToClient, args=(client, address)).start()
-            # self.listenToClient(client, address)
-
-    def listenToClient(self, client, address):
-        db_client = pymongo.MongoClient('localhost', port=27017)
-        database = db_client['Database']
+    def start(self):
         while True:
             try:
-                data = client.recv(SIZE)
+                data = self.client.recv(SIZE)
                 if data:
                     if data[0] < len(self.commands):
-                        self.commands[data[0]](database, client)
+                        self.commands[data[0]]()
                 else:
                     raise socket.error('Client disconnected')
             except:
-                client.close()
+                self.client.close()
                 return False
 
     def auth(self):
-        pass
-
-    def register(self, database, client):
-        certificates = database['Certificates']
-        client.sendall(bytes([0]))
-        login = client.recv(SIZE).decode('utf16')
-        client.sendall(bytes([0]))
-        password = client.recv(SIZE).decode('utf16')
-        if certificates.find_one({"login": login}) is not None:
-            client.sendall(bytes([1]))
+        certificates = self.database['Certificates']
+        self.client.sendall(bytes([0]))
+        login = self.client.recv(SIZE).decode('utf16')
+        self.client.sendall(bytes([0]))
+        password = self.client.recv(SIZE).decode('utf16')
+        if certificates.find_one({"login": login, "password": password}) is None:
+            self.client.sendall(bytes([1]))
             return
-        client.sendall(bytes([0]))
-        key = client.recv(SIZE)
+        else:
+            self.client.sendall(bytes([0]))
+
+    def register(self):
+        certificates = self.database['Certificates']
+        self.client.sendall(bytes([0]))
+        login = self.client.recv(SIZE).decode('utf16')
+        self.client.sendall(bytes([0]))
+        password = self.client.recv(SIZE).decode('utf16')
+        if certificates.find_one({"login": login}) is not None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        key = self.client.recv(SIZE)
         certificates.insert_one({"login": login, "password": password, "public_key": key, "chats": [], "dialogs": []})
         print('updated')
         return
@@ -103,6 +105,32 @@ class ThreadedServer(object):
 
     def __unsubscribe__(self):
         pass
+
+    def get_dialogs(self):
+        pass
+
+    def get_chats(self):
+        pass
+
+
+class ThreadedServer(object):
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((self.host, self.port))
+
+    def listen(self):
+        self.sock.listen(10)
+        while True:
+            client, address = self.sock.accept()
+            client.settimeout(600)
+            session = Session(client, address)
+            threading.Thread(target=session.start).start()
+            # self.listenToClient(client, address)
+
+
 
 if __name__ == "__main__":
     ThreadedServer('', 8080).listen()
