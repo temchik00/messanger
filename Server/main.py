@@ -3,7 +3,7 @@ import threading
 import rsa
 import pymongo
 import json
-
+from bson import ObjectId
 
 SIZE = 2048
 
@@ -24,7 +24,7 @@ class Session:
             self.register,
             self.open_dialog,
             self.open_chat,
-            self.send_message,
+            self.send_message_to_dialog,
             self.send_file,
             self.start_dialog,
             self.create_chat,
@@ -52,7 +52,6 @@ class Session:
                     raise socket.error('Client disconnected')
             except BaseException as error:
                 print(error)
-
                 self.client.close()
                 return False
 
@@ -91,8 +90,22 @@ class Session:
     def open_chat(self):
         pass
 
-    def send_message(self):
-        pass
+    def send_message_to_dialog(self):
+        certificates = self.database['Certificates']
+        dialog_messages = self.database['DialogsMessages']
+        self.client.sendall(bytes([0]))
+        dialog_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        if certificates.find_one({'login': self.user['login'], 'dialogs': dialog_id}) is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        print('start receiving')
+        message = self.__receive_big_data__()
+        print(message)
+        dialog_messages.insert_one({'dialog_id': dialog_id, 'author': self.user['login'],
+                                    'content': message, 'content_type': 0})
+        print('inserted')
+        self.client.sendall(bytes([0]))
 
     def send_file(self):
         pass
@@ -149,6 +162,16 @@ class Session:
 
     def get_chats(self):
         pass
+
+    def __receive_big_data__(self):
+        data = bytearray([])
+        data_part = self.client.recv(SIZE)
+        stop_sign = bytes([0])
+        while data_part != stop_sign:
+            data += data_part
+            self.client.sendall(stop_sign)
+            data_part = self.client.recv(SIZE)
+        return bytes(data)
 
 
 class ThreadedServer(object):
