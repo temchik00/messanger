@@ -10,11 +10,11 @@ SIZE = 2048
 
 # certificates: {login:str, password:str, public_key:binary, chats:[int], dialogs:[int]}
 
-# dialogs_info: {id: int, persons: [string]}
-# dialogs_messages: {dialog_id: int, id: int, author: string, content: string, content_type: int}
+# dialogs_info: {_id: int, persons: [string]}
+# dialogs_messages: {dialog_id: int, _id: int, author: string, content: string, content_type: int}
 
-# chats_info: {id: int, persons: [string], title: string, key: binary}
-# chats_messages: {chat_id: int, id: int, author: string, content: string, content_type: int}
+# chats_info: {_id: int, persons: [string], title: string, key: binary}
+# chats_messages: {chat_id: int, _id: int, author: string, content: string, content_type: int}
 
 
 class Session:
@@ -26,7 +26,7 @@ class Session:
             self.open_chat,
             self.send_message,
             self.send_file,
-            self.create_dialog,
+            self.start_dialog,
             self.create_chat,
             self.add_to_chat,
             self.close_chat,
@@ -52,6 +52,7 @@ class Session:
                     raise socket.error('Client disconnected')
             except BaseException as error:
                 print(error)
+
                 self.client.close()
                 return False
 
@@ -67,7 +68,7 @@ class Session:
             return
         else:
             self.public_key = rsa.PublicKey.load_pkcs1(user['public_key'])
-            self.user = user
+            self.user = dict(user)
             self.client.sendall(bytes([0]))
 
     def register(self):
@@ -96,8 +97,28 @@ class Session:
     def send_file(self):
         pass
 
-    def create_dialog(self):
-        pass
+    def start_dialog(self):
+        self.client.sendall(bytes([0]))
+        other_user = self.client.recv(SIZE)
+        other_user = self.database['Certificates'].find_one({'login': other_user.decode('utf16')})
+        if other_user is None:
+            self.client.sendall(bytes([1]))
+            return
+        user = self.database['Certificates'].find_one({'login': self.user['login']})
+        for id1 in other_user["dialogs"]:
+            if id1 in user["dialogs"]:
+                self.client.sendall(bytes([1]))
+                return
+        dialog_info = self.database['DialogsInfo'].insert_one({'persons': [user['login'], other_user['login']]})
+        print(user['dialogs'])
+        user['dialogs'].append(dialog_info.inserted_id)
+        print(user['dialogs'])
+        other_user['dialogs'].append(dialog_info.inserted_id)
+        self.database['Certificates'].update_one({'_id': user['_id']}, {'$set':
+                                                 {'dialogs': user['dialogs']}})
+        self.database['Certificates'].update_one({'_id': other_user['_id']}, {'$set':
+                                                 {'dialogs': other_user['dialogs']}})
+        self.client.sendall(bytes([0]))
 
     def create_chat(self):
         pass
@@ -119,8 +140,8 @@ class Session:
 
     def get_dialogs(self):
         dialog_ids = self.database['Certificates'].find_one({'login': self.user['login']})['dialogs']
-        dialogs = self.database['DialogsInfo'].find({'login': {'$in': dialog_ids}})
-        dialogs = json.dumps(list(dialogs)).encode("utf16")
+        dialogs = self.database['DialogsInfo'].find({'_id': {'$in': dialog_ids}})
+        dialogs = json.dumps(dict(dialogs)).encode("utf16")
         encrypted = rsa.encrypt(dialogs, self.public_key)
         self.client.sendall(encrypted)
 

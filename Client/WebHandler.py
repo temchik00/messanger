@@ -12,7 +12,7 @@ class Commands(enum.Enum):
     open_chat = 3
     send_message = 4
     send_file = 5
-    create_dialog = 6
+    start_dialog = 6
     create_chat = 7
     add_to_chat = 8
     close_chat = 9
@@ -78,8 +78,10 @@ class Client:
         data = self.client_socket.recv(SIZE)
         if data[0] == 0:
             print("Signed in successfully")
+            return True
         else:
             print("Failed to sign in")
+            return False
 
     def get_all_dialogs(self):
         self.client_socket.sendall(bytes([Commands.get_dialogs.value]))
@@ -88,14 +90,28 @@ class Client:
         dialogs_info = json.loads(dialogs_info)
         return dialogs_info
 
+    def start_dialog(self, other_user):
+        self.client_socket.sendall(bytes([Commands.start_dialog.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(other_user.encode('utf16'))
+        data = self.client_socket.recv(SIZE)
+        if data[0] == 0:
+            print("Dialog started successfully")
+            return True
+        else:
+            print("Failed to start dialog")
+            return False
+
     def end_session(self):
         self.client_socket.close()
 
 
 if __name__ == "__main__":
     c = Client("", 8080)
+    c.register("login", "password")
     c.register("Asd", "password")
     c.auth("Asd", "password")
+    c.start_dialog("login")
     print(c.get_all_dialogs())
     c.end_session()
 
