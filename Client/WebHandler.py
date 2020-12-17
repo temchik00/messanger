@@ -90,7 +90,7 @@ class Client:
         dialogs_info = json.loads(dialogs_info)
         return dialogs_info
 
-    def start_dialog(self, other_user):
+    def start_dialogr(self, other_user):
         self.client_socket.sendall(bytes([Commands.start_dialog.value]))
         self.client_socket.recv(SIZE)
         self.client_socket.sendall(other_user.encode('utf16'))

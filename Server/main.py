@@ -110,9 +110,7 @@ class Session:
                 self.client.sendall(bytes([1]))
                 return
         dialog_info = self.database['DialogsInfo'].insert_one({'persons': [user['login'], other_user['login']]})
-        print(user['dialogs'])
         user['dialogs'].append(dialog_info.inserted_id)
-        print(user['dialogs'])
         other_user['dialogs'].append(dialog_info.inserted_id)
         self.database['Certificates'].update_one({'_id': user['_id']}, {'$set':
                                                  {'dialogs': user['dialogs']}})
@@ -141,7 +139,11 @@ class Session:
     def get_dialogs(self):
         dialog_ids = self.database['Certificates'].find_one({'login': self.user['login']})['dialogs']
         dialogs = self.database['DialogsInfo'].find({'_id': {'$in': dialog_ids}})
-        dialogs = json.dumps(dict(dialogs)).encode("utf16")
+        dialog_list = []
+        for dialog in dialogs:
+            dialog['_id'] = str(dialog['_id'])
+            dialog_list.append(dict(dialog))
+        dialogs = json.dumps(dialog_list).encode("utf16")
         encrypted = rsa.encrypt(dialogs, self.public_key)
         self.client.sendall(encrypted)
 
