@@ -4,6 +4,7 @@ import rsa
 import pymongo
 import json
 from bson import ObjectId
+import pickle
 
 SIZE = 2048
 
@@ -11,7 +12,8 @@ SIZE = 2048
 # certificates: {login:str, password:str, public_key:binary, chats:[int], dialogs:[int]}
 
 # dialogs_info: {_id: int, persons: [string]}
-# dialogs_messages: {dialog_id: int, _id: int, author: string, content: string, content_type: int}
+# dialogs_messages: {dialog_id: int, _id: int, sender: string,
+#                    content_for_sender: string, content_for_receiver:string, content_type: int}
 
 # chats_info: {_id: int, persons: [string], title: string, key: binary}
 # chats_messages: {chat_id: int, _id: int, author: string, content: string, content_type: int}
@@ -22,7 +24,7 @@ class Session:
         self.commands = [
             self.auth,
             self.register,
-            self.open_dialog,
+            self.get_dialog_messages,
             self.open_chat,
             self.send_message_to_dialog,
             self.send_file,
@@ -84,27 +86,60 @@ class Session:
         certificates.insert_one({"login": login, "password": password, "public_key": key, "chats": [], "dialogs": []})
         return
 
-    def open_dialog(self):
-        pass
+    def get_dialog_messages(self):
+        dialogs = self.database['DialogsInfo']
+        dialog_messages = self.database['DialogsMessages']
+        self.client.sendall(bytes([0]))
+        dialog_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        dialog = dialogs.find_one({'_id': dialog_id, 'persons': self.user['login']})
+        if dialog is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        self.client.recv(SIZE)
+        messages_to_send = []
+        messages = dialog_messages.find({'dialog_id': dialog_id}).limit(20)
+        for message in messages:
+            if message['sender'] == self.user['login']:
+                message['content'] = message['content_for_sender']
+            else:
+                message['content'] = message['content_for_receiver']
+            message.pop('content_for_sender', None)
+            message.pop('content_for_receiver', None)
+            message['_id'] = str(message['_id'])
+            message['dialog_id'] = str(message['dialog_id'])
+            messages_to_send.append(message)
+        messages_to_send = pickle.dumps(messages_to_send)
+
+        def encrypt(x):
+            return rsa.encrypt(x, self.public_key)
+        self.__send_big_data__(messages_to_send, encrypt)
 
     def open_chat(self):
         pass
 
     def send_message_to_dialog(self):
         certificates = self.database['Certificates']
+        dialogs = self.database['DialogsInfo']
         dialog_messages = self.database['DialogsMessages']
         self.client.sendall(bytes([0]))
         dialog_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
-        if certificates.find_one({'login': self.user['login'], 'dialogs': dialog_id}) is None:
+        dialog = dialogs.find_one({'_id': dialog_id, 'persons': self.user['login']})
+        if dialog is None:
             self.client.sendall(bytes([1]))
             return
         self.client.sendall(bytes([0]))
-        print('start receiving')
-        message = self.__receive_big_data__()
-        print(message)
-        dialog_messages.insert_one({'dialog_id': dialog_id, 'author': self.user['login'],
-                                    'content': message, 'content_type': 0})
-        print('inserted')
+        self.client.recv(SIZE)
+        dialog['persons'].remove(self.user['login'])
+        receiver = dialog['persons'][0]
+        receiver = certificates.find_one({'login': receiver})
+        self.client.sendall(receiver['public_key'])
+        receiver_message = self.__receive_big_data__()
+        self.client.sendall(bytes([0]))
+        sender_message = self.__receive_big_data__()
+        dialog_messages.insert_one({'dialog_id': dialog_id, 'sender': self.user['login'],
+                                    'content_for_sender': sender_message,
+                                    'content_for_receiver': receiver_message, 'content_type': 0})
         self.client.sendall(bytes([0]))
 
     def send_file(self):
@@ -164,14 +199,28 @@ class Session:
         pass
 
     def __receive_big_data__(self):
-        data = bytearray([])
+        data = bytearray()
         data_part = self.client.recv(SIZE)
         stop_sign = bytes([0])
         while data_part != stop_sign:
-            data += data_part
+            data.extend(data_part)
             self.client.sendall(stop_sign)
             data_part = self.client.recv(SIZE)
         return bytes(data)
+
+    def __send_big_data__(self, info, encryption_method):
+        part_len = 245
+        length = len(info)
+        parts = length // part_len + (0 if length % part_len == 0 else 1)
+        for part_id in range(parts):
+            last = (part_id + 1) * part_len
+            if last > length:
+                last = length
+            part = info[part_id * part_len:last]
+            encrypted = encryption_method(part)
+            self.client.sendall(bytes(encrypted))
+            self.client.recv(SIZE)
+        self.client.sendall(bytes([0]))
 
 
 class ThreadedServer(object):
@@ -189,8 +238,6 @@ class ThreadedServer(object):
             client.settimeout(600)
             session = Session(client, address)
             threading.Thread(target=session.start).start()
-            # self.listenToClient(client, address)
-
 
 
 if __name__ == "__main__":

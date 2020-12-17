@@ -3,12 +3,13 @@ import rsa
 import os
 import enum
 import json
+import pickle
 
 
 class Commands(enum.Enum):
     auth = 0
     register = 1
-    open_dialog = 2
+    get_dialog_messages = 2
     open_chat = 3
     send_message_to_dialog = 4
     send_file = 5
@@ -26,8 +27,8 @@ SIZE = 2048
 
 class Client:
     def __init__(self, host, port):
-        self.public_key = ""
-        self.private_key = ""
+        self.public_key = None
+        self.private_key = None
         self.host = host
         self.port = port
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -70,6 +71,7 @@ class Client:
             return False
 
     def auth(self, login, password):
+        self.__load_keys__()
         self.client_socket.sendall(bytes([Commands.auth.value]))
         self.client_socket.recv(SIZE)
         self.client_socket.sendall(login.encode("utf16"))
@@ -105,17 +107,42 @@ class Client:
     def end_session(self):
         self.client_socket.close()
 
-    def __send_big_info__(self, info, encryption_method):
+    def __send_big_data__(self, info, encryption_method):
+        part_len = 245
         length = len(info)
-        parts = length // SIZE + (0 if length % SIZE == 0 else 1)
+        parts = length // part_len + (0 if length % part_len == 0 else 1)
         for part_id in range(parts):
-            last = (part_id+1) * SIZE
+            last = (part_id+1) * part_len
             if last > length:
                 last = length
-            part = info[part_id * SIZE:last]
-            self.client_socket.sendall(encryption_method(part))
+            part = info[part_id * part_len:last]
+            encrypted = encryption_method(part)
+            self.client_socket.sendall(bytes(encrypted))
             self.client_socket.recv(SIZE)
         self.client_socket.sendall(bytes([0]))
+
+    def __receive_big_data__(self):
+        data = bytearray()
+        data_part = self.client_socket.recv(SIZE)
+        stop_sign = bytes([0])
+        while data_part != stop_sign:
+            data.extend(rsa.decrypt(data_part, self.private_key))
+            self.client_socket.sendall(stop_sign)
+            data_part = self.client_socket.recv(SIZE)
+        return bytes(data)
+
+    def __decrypt_big_data__(self, info, private_key):
+        decrypted = bytearray()
+        part_len = 256
+        length = len(info)
+        parts = length // part_len + (0 if length % part_len == 0 else 1)
+        for part_id in range(parts):
+            last = (part_id + 1) * part_len
+            if last > length:
+                last = length
+            part = info[part_id * part_len:last]
+            decrypted.extend(rsa.decrypt(part, private_key))
+        return decrypted
 
     def send_message_to_dialog(self, dialog_id, message):
         self.client_socket.sendall(bytes([Commands.send_message_to_dialog.value]))
@@ -125,12 +152,20 @@ class Client:
         if result[0] != 0:
             print("Failed to send message")
             return False
-        
+        self.client_socket.sendall(bytes([0]))
+        receiver_public_key = self.client_socket.recv(SIZE)
+        receiver_public_key = rsa.PublicKey.load_pkcs1(receiver_public_key)
         message = message.encode("utf16")
 
-        def temp(x):
-            return x
-        self.__send_big_info__(message, temp)
+        def encode(x):
+            return rsa.encrypt(x, receiver_public_key)
+        self.__send_big_data__(message, encode)
+        self.client_socket.recv(SIZE)
+
+        def encode(x):
+            return rsa.encrypt(x, self.public_key)
+        self.__send_big_data__(message, encode)
+
         result = self.client_socket.recv(SIZE)
         if result[0] != 0:
             print("Failed to send message")
@@ -138,6 +173,19 @@ class Client:
         else:
             print("Message sent successfully")
             return True
+
+    def get_dialog_messages(self, dialog_id):
+        self.client_socket.sendall(bytes([Commands.get_dialog_messages.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(dialog_id.encode('utf16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            print("Failed to receive messages")
+            return False
+        self.client_socket.sendall(bytes([0]))
+        data = self.__receive_big_data__()
+        data = pickle.loads(data)
+        return data
 
 
 if __name__ == "__main__":
@@ -153,6 +201,7 @@ if __name__ == "__main__":
 Начинается война. Потерявшая на войне молодого супруга, 17-летняя Скарлетт производит на свет сына Уэйда Хэмптона. Опечаленная вдовством, Скарлетт ищет возможность скрасить своё безрадостное существование и едет с сыном и служанкой Присси в Атланту к родственникам мужа. Она останавливается в доме тётушки Питтипэт и Мелани, лелея надежду встретиться с Эшли.
 В Атланте ей вновь встречается Ретт Батлер, который скрашивает её унылые будни, оказывая знаки внимания. В суматохе войны, когда все торопятся жить, она идёт против принятых в обществе правил и снимает траур раньше времени. Строгие взгляды южан на условности постепенно меняются, война диктует свои правила — привычный мир рушится.
 После рождественского отпуска Эшли его жена объявляет о своей беременности. С фронта нет вестей об Эшли, который, вероятно, попал в плен. Тем временем, Ретт Батлер наживается на контрабанде и предлагает Скарлетт стать его любовницей, но получает отказ.""")
+    print(c.get_dialog_messages(dialogs[0]['_id']))
     c.end_session()
 
 
