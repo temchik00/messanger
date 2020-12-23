@@ -4,6 +4,7 @@ import os
 import enum
 import json
 import pickle
+import time
 
 
 class Commands(enum.Enum):
@@ -20,19 +21,28 @@ class Commands(enum.Enum):
     close_dialog = 10
     get_dialogs = 11
     get_chats = 12
+    get_dialog_new_messages = 13
 
 
 SIZE = 2048
 
 
 class Client:
-    def __init__(self, host, port):
+    def __init__(self, host="", port=8080):
         self.public_key = None
         self.private_key = None
         self.host = host
         self.port = port
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client_socket.connect((self.host, self.port))
+
+    def __del__(self):
+        self.end_session()
+        del self.client_socket
+        del self.public_key
+        del self.private_key
+        del self.host
+        del self.port
 
     def __generate_keys__(self):
         os.mkdir("./keys")
@@ -63,11 +73,9 @@ class Client:
         self.client_socket.sendall(password.encode("utf16"))
         data = self.client_socket.recv(SIZE)
         if data[0] == 0:
-            print('Registered' + " " + login)
             self.client_socket.sendall(self.public_key.save_pkcs1())
             return True
         else:
-            print('Failed to register' + " " + login)
             return False
 
     def auth(self, login, password):
@@ -79,10 +87,8 @@ class Client:
         self.client_socket.sendall(password.encode("utf16"))
         data = self.client_socket.recv(SIZE)
         if data[0] == 0:
-            print("Signed in successfully")
             return True
         else:
-            print("Failed to sign in")
             return False
 
     def get_all_dialogs(self):
@@ -98,10 +104,8 @@ class Client:
         self.client_socket.sendall(other_user.encode('utf16'))
         data = self.client_socket.recv(SIZE)
         if data[0] == 0:
-            print("Dialog started successfully")
             return True
         else:
-            print("Failed to start dialog")
             return False
 
     def end_session(self):
@@ -126,7 +130,7 @@ class Client:
         data_part = self.client_socket.recv(SIZE)
         stop_sign = bytes([0])
         while data_part != stop_sign:
-            data.extend(rsa.decrypt(data_part, self.private_key))
+            data.extend(data_part)
             self.client_socket.sendall(stop_sign)
             data_part = self.client_socket.recv(SIZE)
         return bytes(data)
@@ -150,7 +154,6 @@ class Client:
         self.client_socket.sendall(dialog_id.encode('utf16'))
         result = self.client_socket.recv(SIZE)
         if result[0] != 0:
-            print("Failed to send message")
             return False
         self.client_socket.sendall(bytes([0]))
         receiver_public_key = self.client_socket.recv(SIZE)
@@ -168,10 +171,8 @@ class Client:
 
         result = self.client_socket.recv(SIZE)
         if result[0] != 0:
-            print("Failed to send message")
             return False
         else:
-            print("Message sent successfully")
             return True
 
     def get_dialog_messages(self, dialog_id):
@@ -180,14 +181,32 @@ class Client:
         self.client_socket.sendall(dialog_id.encode('utf16'))
         result = self.client_socket.recv(SIZE)
         if result[0] != 0:
-            print("Failed to receive messages")
             return False
         self.client_socket.sendall(bytes([0]))
         data = self.__receive_big_data__()
         data = pickle.loads(data)
         for message in data:
             message['content'] = self.__decrypt_big_data__(message['content'], self.private_key).decode('utf16')
+            message['dialog_id'] = rsa.decrypt(message['dialog_id'], self.private_key).decode('utf-16')
+            message['sender'] = rsa.decrypt(message['sender'], self.private_key).decode('utf-16')
         return data
+
+    def get_new_dialog_messages(self, dialog_id, last_id):
+        self.client_socket.sendall(bytes([Commands.get_dialog_new_messages.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(dialog_id.encode('utf16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        self.client_socket.sendall(last_id.to_bytes(4, 'big', signed=True))
+        data = self.__receive_big_data__()
+        data = pickle.loads(data)
+        for message in data:
+            message['content'] = self.__decrypt_big_data__(message['content'], self.private_key).decode('utf16')
+            message['dialog_id'] = rsa.decrypt(message['dialog_id'], self.private_key).decode('utf-16')
+            message['sender'] = rsa.decrypt(message['sender'], self.private_key).decode('utf-16')
+        return data
+
 
 
 if __name__ == "__main__":
@@ -197,12 +216,12 @@ if __name__ == "__main__":
     c.auth("Asd", "password")
     c.start_dialog("login")
     dialogs = c.get_all_dialogs()
-#     c.send_message_to_dialog(dialogs[0]['_id'], """Роман охватывает события на протяжении 12 лет (с 1861 по 1873 годы), развивающиеся на фоне гражданской войны между северными промышленными и южными земледельческими штатами Америки.
-# Южная красавица Скарлетт О’Хара — наполовину ирландка, наполовину француженка — умеет очаровывать мужчин, но тайно влюблена в сына соседского плантатора Эшли Уилкса. Чтобы не допустить свадьбы Эшли с его кузиной Мелани Гамильтон, Скарлетт решается признаться ему в любви, надеясь на тайное бракосочетание с возлюбленным. Благовоспитанный Эшли не готов нарушить данное слово и отказаться от союза с кузиной. Скарлетт негодует и даёт Эшли пощёчину. Невольный свидетель любовной сцены, человек сомнительной репутации Ретт Батлер появляется перед Скарлетт с усмешкой и обещанием не давать истории огласки.
-# Поддавшись слепому гневу, Скарлетт принимает предложение Чарльза Гамильтона — брата Мелани, и через две недели выходит замуж за день до свадьбы Эшли.
-# Начинается война. Потерявшая на войне молодого супруга, 17-летняя Скарлетт производит на свет сына Уэйда Хэмптона. Опечаленная вдовством, Скарлетт ищет возможность скрасить своё безрадостное существование и едет с сыном и служанкой Присси в Атланту к родственникам мужа. Она останавливается в доме тётушки Питтипэт и Мелани, лелея надежду встретиться с Эшли.
-# В Атланте ей вновь встречается Ретт Батлер, который скрашивает её унылые будни, оказывая знаки внимания. В суматохе войны, когда все торопятся жить, она идёт против принятых в обществе правил и снимает траур раньше времени. Строгие взгляды южан на условности постепенно меняются, война диктует свои правила — привычный мир рушится.
-# После рождественского отпуска Эшли его жена объявляет о своей беременности. С фронта нет вестей об Эшли, который, вероятно, попал в плен. Тем временем, Ретт Батлер наживается на контрабанде и предлагает Скарлетт стать его любовницей, но получает отказ.""")
+    c.send_message_to_dialog(dialogs[0]['_id'], """Роман охватывает события на протяжении 12 лет (с 1861 по 1873 годы), развивающиеся на фоне гражданской войны между северными промышленными и южными земледельческими штатами Америки.
+Южная красавица Скарлетт О’Хара — наполовину ирландка, наполовину француженка — умеет очаровывать мужчин, но тайно влюблена в сына соседского плантатора Эшли Уилкса. Чтобы не допустить свадьбы Эшли с его кузиной Мелани Гамильтон, Скарлетт решается признаться ему в любви, надеясь на тайное бракосочетание с возлюбленным. Благовоспитанный Эшли не готов нарушить данное слово и отказаться от союза с кузиной. Скарлетт негодует и даёт Эшли пощёчину. Невольный свидетель любовной сцены, человек сомнительной репутации Ретт Батлер появляется перед Скарлетт с усмешкой и обещанием не давать истории огласки.
+Поддавшись слепому гневу, Скарлетт принимает предложение Чарльза Гамильтона — брата Мелани, и через две недели выходит замуж за день до свадьбы Эшли.
+Начинается война. Потерявшая на войне молодого супруга, 17-летняя Скарлетт производит на свет сына Уэйда Хэмптона. Опечаленная вдовством, Скарлетт ищет возможность скрасить своё безрадостное существование и едет с сыном и служанкой Присси в Атланту к родственникам мужа. Она останавливается в доме тётушки Питтипэт и Мелани, лелея надежду встретиться с Эшли.
+В Атланте ей вновь встречается Ретт Батлер, который скрашивает её унылые будни, оказывая знаки внимания. В суматохе войны, когда все торопятся жить, она идёт против принятых в обществе правил и снимает траур раньше времени. Строгие взгляды южан на условности постепенно меняются, война диктует свои правила — привычный мир рушится.
+После рождественского отпуска Эшли его жена объявляет о своей беременности. С фронта нет вестей об Эшли, который, вероятно, попал в плен. Тем временем, Ретт Батлер наживается на контрабанде и предлагает Скарлетт стать его любовницей, но получает отказ.""")
     print(c.get_dialog_messages(dialogs[0]['_id']))
     c.end_session()
 

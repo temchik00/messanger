@@ -5,16 +5,18 @@ import pymongo
 import json
 from bson import ObjectId
 import pickle
+import sys
+import time
 
 SIZE = 2048
 
 
 # certificates: {login:str, password:str, public_key:binary, chats:[int], dialogs:[int]}
 
-# dialogs_info: {_id: int, persons: [string]}
-# dialogs_messages: {dialog_id: int, _id: int, sender: string,
+# dialogs_info: {_id: ObjectId, persons: [string]}
+# dialogs_messages: {dialog_id: ObjectId, _id: int, sender: string,
 #                    content_for_sender: string, content_for_receiver:string, content_type: int}
-
+# dialog_messages_ids: {dialog_id: ObjectId, available_id: int}
 # chats_info: {_id: int, persons: [string], title: string, key: binary}
 # chats_messages: {chat_id: int, _id: int, author: string, content: string, content_type: int}
 
@@ -34,7 +36,8 @@ class Session:
             self.close_chat,
             self.close_dialog,
             self.get_dialogs,
-            self.get_chats
+            self.get_chats,
+            self.get_dialog_messages_after_id
         ]
         self.user = None
         self.client = client
@@ -86,6 +89,17 @@ class Session:
         certificates.insert_one({"login": login, "password": password, "public_key": key, "chats": [], "dialogs": []})
         return
 
+    def __encrypt_message__(self, message):
+        if message['sender'] == self.user['login']:
+            message['content'] = message['content_for_sender']
+        else:
+            message['content'] = message['content_for_receiver']
+        message.pop('content_for_sender', None)
+        message.pop('content_for_receiver', None)
+        message['dialog_id'] = rsa.encrypt(str(message['dialog_id']).encode('utf-16'), self.public_key)
+        message['sender'] = rsa.encrypt(message['sender'].encode('utf-16'), self.public_key)
+        return message
+
     def get_dialog_messages(self):
         dialogs = self.database['DialogsInfo']
         dialog_messages = self.database['DialogsMessages']
@@ -98,22 +112,31 @@ class Session:
         self.client.sendall(bytes([0]))
         self.client.recv(SIZE)
         messages_to_send = []
-        messages = dialog_messages.find({'dialog_id': dialog_id}).limit(20)
+        messages = dialog_messages.find({'dialog_id': dialog_id}).limit(10)
         for message in messages:
-            if message['sender'] == self.user['login']:
-                message['content'] = message['content_for_sender']
-            else:
-                message['content'] = message['content_for_receiver']
-            message.pop('content_for_sender', None)
-            message.pop('content_for_receiver', None)
-            message['_id'] = str(message['_id'])
-            message['dialog_id'] = str(message['dialog_id'])
-            messages_to_send.append(message)
+            messages_to_send.append(self.__encrypt_message__(message))
         messages_to_send = pickle.dumps(messages_to_send)
+        self.__send_big_data__(messages_to_send)
 
-        def encrypt(x):
-            return rsa.encrypt(x, self.public_key)
-        self.__send_big_data__(messages_to_send, encrypt)
+    def get_dialog_messages_after_id(self):
+        print('i\'m here')
+        dialogs = self.database['DialogsInfo']
+        dialog_messages = self.database['DialogsMessages']
+        self.client.sendall(bytes([0]))
+        dialog_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        dialog = dialogs.find_one({'_id': dialog_id, 'persons': self.user['login']})
+        if dialog is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        last_id = int.from_bytes(self.client.recv(SIZE), 'big', signed=True)
+        print(last_id)
+        messages_to_send = []
+        messages = dialog_messages.find({'dialog_id': dialog_id, '_id': {'$gte': last_id}})
+        for message in messages:
+            messages_to_send.append(self.__encrypt_message__(message))
+        messages_to_send = pickle.dumps(messages_to_send)
+        self.__send_big_data__(messages_to_send)
 
     def open_chat(self):
         pass
@@ -122,6 +145,7 @@ class Session:
         certificates = self.database['Certificates']
         dialogs = self.database['DialogsInfo']
         dialog_messages = self.database['DialogsMessages']
+        messages_ids = self.database['DialogMessagesIds']
         self.client.sendall(bytes([0]))
         dialog_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
         dialog = dialogs.find_one({'_id': dialog_id, 'persons': self.user['login']})
@@ -137,9 +161,11 @@ class Session:
         receiver_message = self.__receive_big_data__()
         self.client.sendall(bytes([0]))
         sender_message = self.__receive_big_data__()
-        dialog_messages.insert_one({'dialog_id': dialog_id, 'sender': self.user['login'],
+        message_id = messages_ids.find_one({'dialog_id': dialog_id})['available_id']
+        dialog_messages.insert_one({'_id': message_id, 'dialog_id': dialog_id, 'sender': self.user['login'],
                                     'content_for_sender': sender_message,
                                     'content_for_receiver': receiver_message, 'content_type': 0})
+        messages_ids.update_one({'dialog_id': dialog_id}, {'$set': {'available_id': (message_id + 1)}})
         self.client.sendall(bytes([0]))
 
     def send_file(self):
@@ -164,6 +190,7 @@ class Session:
                                                  {'dialogs': user['dialogs']}})
         self.database['Certificates'].update_one({'_id': other_user['_id']}, {'$set':
                                                  {'dialogs': other_user['dialogs']}})
+        self.database['DialogMessagesIds'].insert_one({'dialog_id': dialog_info.inserted_id, 'available_id': 0})
         self.client.sendall(bytes([0]))
 
     def create_chat(self):
@@ -208,17 +235,15 @@ class Session:
             data_part = self.client.recv(SIZE)
         return bytes(data)
 
-    def __send_big_data__(self, info, encryption_method):
-        part_len = 245
+    def __send_big_data__(self, info):
         length = len(info)
-        parts = length // part_len + (0 if length % part_len == 0 else 1)
+        parts = length // SIZE + (0 if length % SIZE == 0 else 1)
         for part_id in range(parts):
-            last = (part_id + 1) * part_len
+            last = (part_id + 1) * SIZE
             if last > length:
                 last = length
-            part = info[part_id * part_len:last]
-            encrypted = encryption_method(part)
-            self.client.sendall(bytes(encrypted))
+            part = info[part_id * SIZE:last]
+            self.client.sendall(part)
             self.client.recv(SIZE)
         self.client.sendall(bytes([0]))
 
