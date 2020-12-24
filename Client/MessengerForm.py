@@ -14,7 +14,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 class Ui_MessengerWindow(object):
     def setupUi(self, MessengerWindow):
         MessengerWindow.setObjectName("MessengerWindow")
-        MessengerWindow.resize(800, 800)
+        MessengerWindow.resize(938, 800)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.MinimumExpanding)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -50,6 +50,9 @@ class Ui_MessengerWindow(object):
         sizePolicy.setHeightForWidth(self.chatsList.sizePolicy().hasHeightForWidth())
         self.chatsList.setSizePolicy(sizePolicy)
         self.chatsList.setMaximumSize(QtCore.QSize(256, 16777215))
+        font = QtGui.QFont()
+        font.setPointSize(12)
+        self.chatsList.setFont(font)
         self.chatsList.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.chatsList.setDefaultDropAction(QtCore.Qt.CopyAction)
         self.chatsList.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectItems)
@@ -119,7 +122,7 @@ class Ui_MessengerWindow(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollArea.setObjectName("scrollArea")
         self.scrollAreaWidgetContents = QtWidgets.QWidget()
-        self.scrollAreaWidgetContents.setGeometry(QtCore.QRect(0, 0, 236, 681))
+        self.scrollAreaWidgetContents.setGeometry(QtCore.QRect(0, 0, 374, 681))
         self.scrollAreaWidgetContents.setObjectName("scrollAreaWidgetContents")
         self.verticalLayout_3 = QtWidgets.QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_3.setContentsMargins(4, -1, -1, -1)

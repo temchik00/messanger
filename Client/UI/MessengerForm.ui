@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>800</width>
+    <width>938</width>
     <height>800</height>
    </rect>
   </property>
@@ -67,6 +67,11 @@
           <width>256</width>
           <height>16777215</height>
          </size>
+        </property>
+        <property name="font">
+         <font>
+          <pointsize>12</pointsize>
+         </font>
         </property>
         <property name="horizontalScrollBarPolicy">
          <enum>Qt::ScrollBarAlwaysOff</enum>
@@ -223,7 +228,7 @@
              <rect>
               <x>0</x>
               <y>0</y>
-              <width>236</width>
+              <width>374</width>
               <height>681</height>
              </rect>
             </property>

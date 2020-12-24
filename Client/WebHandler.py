@@ -4,6 +4,7 @@ import os
 import enum
 import json
 import pickle
+from Crypto.Cipher import AES
 import time
 
 
@@ -11,17 +12,17 @@ class Commands(enum.Enum):
     auth = 0
     register = 1
     get_dialog_messages = 2
-    open_chat = 3
-    send_message_to_dialog = 4
-    send_file = 5
-    start_dialog = 6
-    create_chat = 7
-    add_to_chat = 8
-    close_chat = 9
-    close_dialog = 10
-    get_dialogs = 11
-    get_chats = 12
-    get_dialog_new_messages = 13
+    send_message_to_dialog = 3
+    send_file = 4
+    start_dialog = 5
+    create_chat = 6
+    add_to_chat = 7
+    get_dialogs = 8
+    get_chats = 9
+    get_dialog_new_messages = 10
+    send_message_to_chat = 11
+    get_chat_messages = 12
+    get_chat_messages_after_id = 13
 
 
 SIZE = 2048
@@ -207,6 +208,88 @@ class Client:
             message['sender'] = rsa.decrypt(message['sender'], self.private_key).decode('utf-16')
         return data
 
+    def create_chat(self, title):
+        self.client_socket.sendall(bytes([Commands.create_chat.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(title.encode('utf16'))
+        self.client_socket.recv(SIZE)
+
+    def get_chats(self):
+        self.client_socket.sendall(bytes([Commands.get_chats.value]))
+        encrypted_chats_info = self.client_socket.recv(SIZE)
+        chats_info = rsa.decrypt(encrypted_chats_info, self.private_key)
+        chats_info = pickle.loads(chats_info)
+        return chats_info
+
+    def send_message_to_chat(self, chat_id, key, message):
+        self.client_socket.sendall(bytes([Commands.send_message_to_chat.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(chat_id.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        cipher = AES.new(key, AES.MODE_EAX)
+        nonce = cipher.nonce
+        self.client_socket.sendall(nonce)
+        self.client_socket.recv(SIZE)
+        encrypted_message = cipher.encrypt(message.encode('utf-16'))
+
+        def encode(x):
+            return x
+        self.__send_big_data__(encrypted_message, encode)
+        self.client_socket.recv(SIZE)
+        return True
+
+    def get_chat_messages(self, chat_id, key):
+        self.client_socket.sendall(bytes([Commands.get_chat_messages.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(chat_id.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        self.client_socket.sendall(bytes([0]))
+        data = self.__receive_big_data__()
+        data = pickle.loads(data)
+        for message in data:
+            message['chat_id'] = rsa.decrypt(message['chat_id'], self.private_key).decode('utf-16')
+            message['sender'] = rsa.decrypt(message['sender'], self.private_key).decode('utf-16')
+            message['nonce'] = rsa.decrypt(message['nonce'], self.private_key)
+            cipher = AES.new(key, AES.MODE_EAX, nonce=message['nonce'])
+            message['content'] = cipher.decrypt(message['content']).decode('utf-16')
+        return data
+
+    def get_new_chat_messages(self, chat_id, last_id, key):
+        self.client_socket.sendall(bytes([Commands.get_chat_messages_after_id.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(chat_id.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        self.client_socket.sendall(last_id.to_bytes(4, 'big', signed=True))
+        data = self.__receive_big_data__()
+        data = pickle.loads(data)
+        for message in data:
+            message['chat_id'] = rsa.decrypt(message['chat_id'], self.private_key).decode('utf-16')
+            message['sender'] = rsa.decrypt(message['sender'], self.private_key).decode('utf-16')
+            message['nonce'] = rsa.decrypt(message['nonce'], self.private_key)
+            cipher = AES.new(key, AES.MODE_EAX, nonce=message['nonce'])
+            message['content'] = cipher.decrypt(message['content']).decode('utf-16')
+        return data
+
+    def add_member_to_chat(self, chat_id, member_nickname):
+        self.client_socket.sendall(bytes([Commands.add_to_chat.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(member_nickname.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        self.client_socket.sendall(chat_id.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        self.client_socket.sendall(bytes([0]))
+        self.client_socket.recv(SIZE)
+        return True
 
 
 if __name__ == "__main__":

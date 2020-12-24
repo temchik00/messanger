@@ -5,8 +5,8 @@ import pymongo
 import json
 from bson import ObjectId
 import pickle
-import sys
-import time
+from Crypto.Cipher import AES
+import os
 
 SIZE = 2048
 
@@ -17,8 +17,10 @@ SIZE = 2048
 # dialogs_messages: {dialog_id: ObjectId, _id: int, sender: string,
 #                    content_for_sender: string, content_for_receiver:string, content_type: int}
 # dialog_messages_ids: {dialog_id: ObjectId, available_id: int}
+
 # chats_info: {_id: int, persons: [string], title: string, key: binary}
-# chats_messages: {chat_id: int, _id: int, author: string, content: string, content_type: int}
+# chats_messages: {chat_id: ObjectId, _id: int, sender: string, content: string, content_type: int, nonce:byte}
+# chats_messages_ids: {chat_id: ObjectId, available_id: int}
 
 
 class Session:
@@ -27,17 +29,17 @@ class Session:
             self.auth,
             self.register,
             self.get_dialog_messages,
-            self.open_chat,
             self.send_message_to_dialog,
             self.send_file,
             self.start_dialog,
             self.create_chat,
             self.add_to_chat,
-            self.close_chat,
-            self.close_dialog,
             self.get_dialogs,
             self.get_chats,
-            self.get_dialog_messages_after_id
+            self.get_dialog_messages_after_id,
+            self.send_message_to_chat,
+            self.get_chat_messages,
+            self.get_chat_messages_after_id
         ]
         self.user = None
         self.client = client
@@ -89,7 +91,7 @@ class Session:
         certificates.insert_one({"login": login, "password": password, "public_key": key, "chats": [], "dialogs": []})
         return
 
-    def __encrypt_message__(self, message):
+    def __encrypt_dialog_message__(self, message):
         if message['sender'] == self.user['login']:
             message['content'] = message['content_for_sender']
         else:
@@ -112,14 +114,13 @@ class Session:
         self.client.sendall(bytes([0]))
         self.client.recv(SIZE)
         messages_to_send = []
-        messages = dialog_messages.find({'dialog_id': dialog_id}).limit(10)
+        messages = dialog_messages.find({'dialog_id': dialog_id})
         for message in messages:
-            messages_to_send.append(self.__encrypt_message__(message))
+            messages_to_send.append(self.__encrypt_dialog_message__(message))
         messages_to_send = pickle.dumps(messages_to_send)
         self.__send_big_data__(messages_to_send)
 
     def get_dialog_messages_after_id(self):
-        print('i\'m here')
         dialogs = self.database['DialogsInfo']
         dialog_messages = self.database['DialogsMessages']
         self.client.sendall(bytes([0]))
@@ -134,12 +135,9 @@ class Session:
         messages_to_send = []
         messages = dialog_messages.find({'dialog_id': dialog_id, '_id': {'$gte': last_id}})
         for message in messages:
-            messages_to_send.append(self.__encrypt_message__(message))
+            messages_to_send.append(self.__encrypt_dialog_message__(message))
         messages_to_send = pickle.dumps(messages_to_send)
         self.__send_big_data__(messages_to_send)
-
-    def open_chat(self):
-        pass
 
     def send_message_to_dialog(self):
         certificates = self.database['Certificates']
@@ -194,22 +192,40 @@ class Session:
         self.client.sendall(bytes([0]))
 
     def create_chat(self):
-        pass
+        self.client.sendall(bytes([0]))
+        title = self.client.recv(SIZE).decode('utf-16')
+        key = os.urandom(32)
+        chat_info = self.database['ChatsInfo'].insert_one({'persons': [self.user['login']],
+                                                           'title': title, 'key': key})
+        user = self.database['Certificates'].find_one({'login': self.user['login']})
+        user['chats'].append(chat_info.inserted_id)
+        self.database['Certificates'].update_one({'_id': user['_id']},
+                                                 {'$set': {'chats': user['chats']}})
+        self.database['ChatMessagesIds'].insert_one({'chat_id': chat_info.inserted_id, 'available_id': 0})
+        self.client.sendall(bytes([0]))
 
     def add_to_chat(self):
-        pass
-
-    def __subscribe_to_changes__(self):
-        pass
-
-    def close_chat(self):
-        pass
-
-    def close_dialog(self):
-        pass
-
-    def __unsubscribe__(self):
-        pass
+        certificates = self.database['Certificates']
+        chats = self.database['ChatsInfo']
+        self.client.sendall(bytes([0]))
+        member_nick = self.client.recv(SIZE).decode('utf-16')
+        member_to_add = certificates.find_one({'login': member_nick})
+        if member_to_add is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        chat_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        chat = chats.find_one({'_id': chat_id, 'persons': self.user['login']})
+        if chat is None or chat_id in member_to_add['chats']:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        self.client.recv(SIZE)
+        chat['persons'].append(member_nick)
+        chats.update_one({'_id': chat_id}, {'$set': {'persons': chat['persons']}})
+        member_to_add['chats'].append(chat_id)
+        certificates.update_one({'_id': member_to_add['_id']}, {'$set': {'chats': member_to_add['chats']}})
+        self.client.sendall(bytes([0]))
 
     def get_dialogs(self):
         dialog_ids = self.database['Certificates'].find_one({'login': self.user['login']})['dialogs']
@@ -223,7 +239,79 @@ class Session:
         self.client.sendall(encrypted)
 
     def get_chats(self):
-        pass
+        chat_ids = self.database['Certificates'].find_one({'login': self.user['login']})['chats']
+        chats = self.database['ChatsInfo'].find({'_id': {'$in': chat_ids}})
+        chat_list = []
+        for chat in chats:
+            chat['_id'] = str(chat['_id'])
+            chat_list.append(dict(chat))
+        chats = pickle.dumps(chat_list)
+        encrypted = rsa.encrypt(chats, self.public_key)
+        self.client.sendall(encrypted)
+
+    def send_message_to_chat(self):
+        print('entered sending messages')
+        chats = self.database['ChatsInfo']
+        chat_messages = self.database['ChatsMessages']
+        messages_ids = self.database['ChatMessagesIds']
+        self.client.sendall(bytes([0]))
+        chat_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        chat = chats.find_one({'_id': chat_id, 'persons': self.user['login']})
+        if chat is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        nonce = self.client.recv(SIZE)
+        self.client.sendall(bytes([0]))
+        encrypted_message = self.__receive_big_data__()
+        message_id = messages_ids.find_one({'chat_id': chat_id})['available_id']
+        chat_messages.insert_one({'chat_id': chat_id, '_id': message_id, 'sender': self.user['login'],
+                                  'content': encrypted_message, 'content_type': 0, 'nonce': nonce})
+        messages_ids.update_one({'chat_id': chat_id}, {'$set': {'available_id': (message_id + 1)}})
+        self.client.sendall(bytes([0]))
+
+    def __encrypt_chat_message__(self, message):
+        message['chat_id'] = rsa.encrypt(str(message['chat_id']).encode('utf-16'), self.public_key)
+        message['sender'] = rsa.encrypt(message['sender'].encode('utf-16'), self.public_key)
+        message['nonce'] = rsa.encrypt(message['nonce'], self.public_key)
+        return message
+
+    def get_chat_messages(self):
+        chats = self.database['ChatsInfo']
+        chat_messages = self.database['ChatsMessages']
+        self.client.sendall(bytes([0]))
+        chat_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        chat = chats.find_one({'_id': chat_id, 'persons': self.user['login']})
+        if chat is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        self.client.recv(SIZE)
+        messages_to_send = []
+        messages = chat_messages.find({'chat_id': chat_id})
+        for message in messages:
+            messages_to_send.append(self.__encrypt_chat_message__(message))
+        messages_to_send = pickle.dumps(messages_to_send)
+        self.__send_big_data__(messages_to_send)
+
+    def get_chat_messages_after_id(self):
+        chats = self.database['ChatsInfo']
+        chat_messages = self.database['ChatsMessages']
+        self.client.sendall(bytes([0]))
+        chat_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        chat = chats.find_one({'_id': chat_id, 'persons': self.user['login']})
+        if chat is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        last_id = int.from_bytes(self.client.recv(SIZE), 'big', signed=True)
+        messages_to_send = []
+        messages = chat_messages.find({'chat_id': chat_id, '_id': {'$gte': last_id}})
+        for message in messages:
+            messages_to_send.append(self.__encrypt_chat_message__(message))
+
+        messages_to_send = pickle.dumps(messages_to_send)
+        self.__send_big_data__(messages_to_send)
 
     def __receive_big_data__(self):
         data = bytearray()
