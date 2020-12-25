@@ -193,6 +193,8 @@ class Client:
             message['content'] = self.__decrypt_big_data__(message['content'], self.private_key).decode('utf16')
             message['dialog_id'] = rsa.decrypt(message['dialog_id'], self.private_key).decode('utf-16')
             message['sender'] = rsa.decrypt(message['sender'], self.private_key).decode('utf-16')
+            if message['content_type'] == 1:
+                message['file_id'] = rsa.decrypt(message['file_id'], self.private_key).decode('utf-16')
         return data
 
     def get_new_dialog_messages(self, dialog_id, last_id):
@@ -209,6 +211,8 @@ class Client:
             message['content'] = self.__decrypt_big_data__(message['content'], self.private_key).decode('utf16')
             message['dialog_id'] = rsa.decrypt(message['dialog_id'], self.private_key).decode('utf-16')
             message['sender'] = rsa.decrypt(message['sender'], self.private_key).decode('utf-16')
+            if message['content_type'] == 1:
+                message['file_id'] = rsa.decrypt(message['file_id'], self.private_key).decode('utf-16')
         return data
 
     def create_chat(self, title):
@@ -259,6 +263,8 @@ class Client:
             message['nonce'] = rsa.decrypt(message['nonce'], self.private_key)
             cipher = AES.new(key, AES.MODE_EAX, nonce=message['nonce'])
             message['content'] = cipher.decrypt(message['content']).decode('utf-16')
+            if message['content_type'] == 1:
+                message['file_id'] = rsa.decrypt(message['file_id'], self.private_key).decode('utf-16')
         return data
 
     def get_new_chat_messages(self, chat_id, last_id, key):
@@ -277,6 +283,8 @@ class Client:
             message['nonce'] = rsa.decrypt(message['nonce'], self.private_key)
             cipher = AES.new(key, AES.MODE_EAX, nonce=message['nonce'])
             message['content'] = cipher.decrypt(message['content']).decode('utf-16')
+            if message['content_type'] == 1:
+                message['file_id'] = rsa.decrypt(message['file_id'], self.private_key).decode('utf-16')
         return data
 
     def add_member_to_chat(self, chat_id, member_nickname):
@@ -361,7 +369,7 @@ class Client:
         self.client_socket.recv(SIZE)
         self.client_socket.sendall(file_id.encode('utf-16'))
         file = self.__receive_big_data__()
-        return file
+        return pickle.loads(file)
 
 if __name__ == "__main__":
     c = Client("", 8080)

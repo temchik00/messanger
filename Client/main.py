@@ -1,6 +1,7 @@
 import sys
 from Client import LoginRegisterForm, WebHandler, MessengerForm, StartConversationForm, InfoForm
 from PyQt5 import QtCore, QtWidgets, QtGui
+from Crypto.Cipher import AES
 import enum
 import os
 
@@ -168,13 +169,13 @@ class MessengerWindow(QtWidgets.QMainWindow, MessengerForm.Ui_MessengerWindow):
                     messages = self.web_handler.get_chat_messages(self.activeChat['_id'], self.activeChat['key'])
                 if len(messages) > 0:
                     for message in messages:
-                        self.addMessage(message['sender'], message['content'])
+                        self.addMessage(message['sender'], message['content'], message)
                     self.last_message = messages[-1]['_id'] + 1
                 self.refreshMessagesTimer.start(3000)
                 self.chatContainer.show()
                 self.NoChatMessage.hide()
 
-    def addMessage(self, author, message):
+    def addMessage(self, author, message, message_info):
         message_container = QtWidgets.QWidget(self.chatContent)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
         sizePolicy.setHorizontalStretch(0)
@@ -195,6 +196,23 @@ class MessengerWindow(QtWidgets.QMainWindow, MessengerForm.Ui_MessengerWindow):
         verticalLayout_6.addWidget(nickname_label)
         message_label = QtWidgets.QLabel(message_container)
         message_label.setText(message)
+
+        if message_info['content_type'] == 1:
+            def download_file(argument):
+                file = self.web_handler.get_file(message_info['file_id'])
+                filename = QtWidgets.QFileDialog.getSaveFileName(self, 'Save file')[0]
+                print(filename)
+                if self.activeChat['conversation_type'] == ConversationType.dialog.value:
+                    file = self.web_handler.__decrypt_big_data__(file['file'], self.web_handler.private_key)
+                else:
+                    cipher = AES.new(self.activeChat['key'], AES.MODE_EAX, nonce=file['nonce'])
+                    file = cipher.decrypt(file['file'])
+                with open(filename, 'wb') as file_to_write:
+                    file_to_write.write(file)
+            message_label.mousePressEvent = download_file
+            message_label.setStyleSheet("color: rgb(11, 112, 227)")
+            message_label.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -229,7 +247,7 @@ class MessengerWindow(QtWidgets.QMainWindow, MessengerForm.Ui_MessengerWindow):
                                                               self.activeChat['key'])
         if len(messages) > 0:
             for message in messages:
-                self.addMessage(message['sender'], message['content'])
+                self.addMessage(message['sender'], message['content'], message)
             self.last_message = messages[-1]['_id'] + 1
 
     def showInfo(self):

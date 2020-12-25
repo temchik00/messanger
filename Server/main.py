@@ -321,6 +321,8 @@ class Session:
         message['chat_id'] = rsa.encrypt(str(message['chat_id']).encode('utf-16'), self.public_key)
         message['sender'] = rsa.encrypt(message['sender'].encode('utf-16'), self.public_key)
         message['nonce'] = rsa.encrypt(message['nonce'], self.public_key)
+        if message['content_type'] == 1:
+            message['file_id'] = rsa.encrypt(str(message['file_id']).encode('utf-16'), self.public_key)
         return message
 
     def get_chat_messages(self):
