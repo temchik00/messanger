@@ -2,6 +2,7 @@ import sys
 from Client import LoginRegisterForm, WebHandler, MessengerForm, StartConversationForm, InfoForm
 from PyQt5 import QtCore, QtWidgets, QtGui
 import enum
+import os
 
 
 class ConversationType(enum.Enum):
@@ -24,10 +25,11 @@ class InfoWindow(QtWidgets.QDialog, InfoForm.Ui_Dialog):
                 self.conversationTitle.setText(self.conversation['persons'][1])
             else:
                 self.conversationTitle.setText(self.conversation['persons'][0])
+            self.membersList.addItems(self.conversation['persons'])
         else:
             self.conversationTitle.setText(self.conversation['title'])
             self.addMemberButton.clicked.connect(self.addMember)
-        self.membersList.addItems(self.conversation['persons'])
+            self.membersList.addItems(self.web_handler.get_chat_members(self.conversation['_id']))
 
     def addMember(self):
         result = self.web_handler.add_member_to_chat(self.conversation['_id'], self.memberNickname.text())
@@ -37,6 +39,8 @@ class InfoWindow(QtWidgets.QDialog, InfoForm.Ui_Dialog):
         self.dialogWindow.setModal(True)
         if result:
             self.dialogWindow.setText('New member successfully added')
+            self.membersList.clear()
+            self.membersList.addItems(self.web_handler.get_chat_members(self.conversation['_id']))
         else:
             self.dialogWindow.setText('Failed to add new member')
         self.dialogWindow.show()
@@ -83,6 +87,8 @@ class MessengerWindow(QtWidgets.QMainWindow, MessengerForm.Ui_MessengerWindow):
     def __init__(self, web_handler, login):
         super().__init__()
         self.setupUi(self)
+        icon = QtGui.QIcon('UI/Upload-Icon-PNG-Image.png')
+        self.sendFileButton.setIcon(icon)
         self.chatListUpdateTimer = QtCore.QTimer()
         self.chatListUpdateTimer.timeout.connect(self.updateChatList)
         self.refreshMessagesTimer = QtCore.QTimer()
@@ -99,6 +105,21 @@ class MessengerWindow(QtWidgets.QMainWindow, MessengerForm.Ui_MessengerWindow):
         self.sendButton.clicked.connect(self.sendMessage)
         self.startConversationButton.clicked.connect(self.startConversation)
         self.infoButton.clicked.connect(self.showInfo)
+        self.sendFileButton.clicked.connect(self.sendFile)
+
+    def sendFile(self):
+        filename = QtWidgets.QFileDialog.getOpenFileName(self, 'Select file')[0]
+        print(filename)
+        with open(filename, 'rb') as file:
+            byte_file = file.read()
+        filename = os.path.basename(filename)
+        if self.activeChat['conversation_type'] == ConversationType.dialog.value:
+            result = self.web_handler.send_file_to_dialog(self.activeChat['_id'], filename, byte_file)
+        else:
+            result = self.web_handler.send_file_to_chat(self.activeChat['_id'], self.activeChat['key'],
+                                                        filename, byte_file)
+        if result:
+            self.getNewMessages()
 
     def updateChatList(self):
         dialogs = self.web_handler.get_all_dialogs()
@@ -134,6 +155,8 @@ class MessengerWindow(QtWidgets.QMainWindow, MessengerForm.Ui_MessengerWindow):
                 self.refreshMessagesTimer.stop()
                 self.last_message = 0
                 self.activeChat = selected[0].data(QtCore.Qt.UserRole)
+                for i in reversed(range(self.verticalLayout_4.count())):
+                    self.verticalLayout_4.itemAt(i).widget().setParent(None)
                 if self.activeChat['conversation_type'] == ConversationType.dialog.value:
                     if self.activeChat['persons'][0] == self.login:
                         self.chatLabel.setText(self.activeChat['persons'][1])
@@ -143,14 +166,11 @@ class MessengerWindow(QtWidgets.QMainWindow, MessengerForm.Ui_MessengerWindow):
                 else:
                     self.chatLabel.setText(self.activeChat['title'])
                     messages = self.web_handler.get_chat_messages(self.activeChat['_id'], self.activeChat['key'])
-                print(messages)
                 if len(messages) > 0:
                     for message in messages:
                         self.addMessage(message['sender'], message['content'])
                     self.last_message = messages[-1]['_id'] + 1
                 self.refreshMessagesTimer.start(3000)
-                for i in reversed(range(self.verticalLayout_6.count())):
-                    self.verticalLayout_6.itemAt(i).widget().setParent(None)
                 self.chatContainer.show()
                 self.NoChatMessage.hide()
 

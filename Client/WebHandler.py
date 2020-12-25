@@ -13,7 +13,7 @@ class Commands(enum.Enum):
     register = 1
     get_dialog_messages = 2
     send_message_to_dialog = 3
-    send_file = 4
+    send_file_to_dialog = 4
     start_dialog = 5
     create_chat = 6
     add_to_chat = 7
@@ -23,6 +23,9 @@ class Commands(enum.Enum):
     send_message_to_chat = 11
     get_chat_messages = 12
     get_chat_messages_after_id = 13
+    get_chat_members = 14
+    get_file = 15
+    send_file_to_chat = 16
 
 
 SIZE = 2048
@@ -291,6 +294,74 @@ class Client:
         self.client_socket.recv(SIZE)
         return True
 
+    def get_chat_members(self, chat_id):
+        self.client_socket.sendall(bytes([Commands.get_chat_members.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(chat_id.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        self.client_socket.sendall(bytes([0]))
+        encrypted = self.client_socket.recv(SIZE)
+        members = pickle.loads(rsa.decrypt(encrypted, self.private_key))
+        return members
+
+    def send_file_to_dialog(self, dialog_id, filename, file):
+        self.client_socket.sendall(bytes([Commands.send_file_to_dialog.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(dialog_id.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        self.client_socket.sendall(rsa.encrypt(filename.encode('utf-16'), self.public_key))
+        self.client_socket.recv(SIZE)
+        def encrypt(x):
+            return rsa.encrypt(x, self.public_key)
+        self.__send_big_data__(file, encrypt)
+        receiver_public_key = self.client_socket.recv(SIZE)
+        receiver_public_key = rsa.PublicKey.load_pkcs1(receiver_public_key)
+
+        self.client_socket.sendall(rsa.encrypt(filename.encode('utf-16'), receiver_public_key))
+        self.client_socket.recv(SIZE)
+        def encrypt(x):
+            return rsa.encrypt(x, receiver_public_key)
+        self.__send_big_data__(file, encrypt)
+        self.client_socket.recv(SIZE)
+        return True
+
+    def send_file_to_chat(self, chat_id, key, filename, file):
+        self.client_socket.sendall(bytes([Commands.send_file_to_chat.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(chat_id.encode('utf-16'))
+        result = self.client_socket.recv(SIZE)
+        if result[0] != 0:
+            return False
+        cipher = AES.new(key, AES.MODE_EAX)
+        nonce = cipher.nonce
+        self.client_socket.sendall(nonce)
+        self.client_socket.recv(SIZE)
+        encrypted_filename = cipher.encrypt(filename.encode('utf-16'))
+        self.client_socket.sendall(encrypted_filename)
+        self.client_socket.recv(SIZE)
+
+        cipher = AES.new(key, AES.MODE_EAX)
+        nonce = cipher.nonce
+        self.client_socket.sendall(nonce)
+        self.client_socket.recv(SIZE)
+        encrypted_file = cipher.encrypt(file)
+
+        def encode(x):
+            return x
+        self.__send_big_data__(encrypted_file, encode)
+        self.client_socket.recv(SIZE)
+        return True
+
+    def get_file(self, file_id):
+        self.client_socket.sendall(bytes([Commands.get_file.value]))
+        self.client_socket.recv(SIZE)
+        self.client_socket.sendall(file_id.encode('utf-16'))
+        file = self.__receive_big_data__()
+        return file
 
 if __name__ == "__main__":
     c = Client("", 8080)

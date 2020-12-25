@@ -14,13 +14,17 @@ SIZE = 2048
 # certificates: {login:str, password:str, public_key:binary, chats:[int], dialogs:[int]}
 
 # dialogs_info: {_id: ObjectId, persons: [string]}
-# dialogs_messages: {dialog_id: ObjectId, _id: int, sender: string,
-#                    content_for_sender: string, content_for_receiver:string, content_type: int}
+# dialogs_messages: {dialog_id: ObjectId, _id: int, sender: string, content_for_sender: string,
+#                    content_for_receiver:string, content_type: int,
+#                    ?sender_file_id: ObjectId, ?receiver_file_id: ObjectId}
 # dialog_messages_ids: {dialog_id: ObjectId, available_id: int}
 
-# chats_info: {_id: int, persons: [string], title: string, key: binary}
-# chats_messages: {chat_id: ObjectId, _id: int, sender: string, content: string, content_type: int, nonce:byte}
+# chats_info: {_id: ObjectId, persons: [string], title: string, key: binary}
+# chats_messages: {chat_id: ObjectId, _id: int, sender: string, content: string,
+#                  content_type: int, nonce: byte, ?file_id: ObjectId}
 # chats_messages_ids: {chat_id: ObjectId, available_id: int}
+
+# files: {_id: ObjectId, file: binary, ?nonce: byte}
 
 
 class Session:
@@ -30,7 +34,7 @@ class Session:
             self.register,
             self.get_dialog_messages,
             self.send_message_to_dialog,
-            self.send_file,
+            self.send_file_to_dialog,
             self.start_dialog,
             self.create_chat,
             self.add_to_chat,
@@ -39,7 +43,10 @@ class Session:
             self.get_dialog_messages_after_id,
             self.send_message_to_chat,
             self.get_chat_messages,
-            self.get_chat_messages_after_id
+            self.get_chat_messages_after_id,
+            self.get_chat_members,
+            self.get_file,
+            self.send_file_to_chat
         ]
         self.user = None
         self.client = client
@@ -94,8 +101,17 @@ class Session:
     def __encrypt_dialog_message__(self, message):
         if message['sender'] == self.user['login']:
             message['content'] = message['content_for_sender']
+            if message['content_type'] == 1:
+                message['file_id'] = rsa.encrypt(str(message['sender_file_id']).encode('utf-16'), self.public_key)
+                message.pop('sender_file_id', None)
+                message.pop('receiver_file_id', None)
         else:
             message['content'] = message['content_for_receiver']
+            if message['content_type'] == 1:
+                message['file_id'] = rsa.encrypt(str(message['receiver_file_id']).encode('utf-16'), self.public_key)
+                message.pop('sender_file_id', None)
+                message.pop('receiver_file_id', None)
+
         message.pop('content_for_sender', None)
         message.pop('content_for_receiver', None)
         message['dialog_id'] = rsa.encrypt(str(message['dialog_id']).encode('utf-16'), self.public_key)
@@ -166,8 +182,40 @@ class Session:
         messages_ids.update_one({'dialog_id': dialog_id}, {'$set': {'available_id': (message_id + 1)}})
         self.client.sendall(bytes([0]))
 
-    def send_file(self):
-        pass
+    def send_file_to_dialog(self):
+        certificates = self.database['Certificates']
+        dialogs = self.database['DialogsInfo']
+        dialog_messages = self.database['DialogsMessages']
+        messages_ids = self.database['DialogMessagesIds']
+        files = self.database['Files']
+        self.client.sendall(bytes([0]))
+        dialog_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        dialog = dialogs.find_one({'_id': dialog_id, 'persons': self.user['login']})
+        if dialog is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        dialog['persons'].remove(self.user['login'])
+        receiver = dialog['persons'][0]
+        receiver = certificates.find_one({'login': receiver})
+        sender_filename = self.client.recv(SIZE)
+        self.client.sendall(bytes([0]))
+        sender_file = self.__receive_big_data__()
+        file_info = files.insert_one({'file': sender_file})
+        sender_file_id = file_info.inserted_id
+        self.client.sendall(receiver['public_key'])
+        receiver_filename = self.client.recv(SIZE)
+        self.client.sendall(bytes([0]))
+        receiver_file = self.__receive_big_data__()
+        file_info = files.insert_one({'file': receiver_file})
+        receiver_file_id = file_info.inserted_id
+        message_id = messages_ids.find_one({'dialog_id': dialog_id})['available_id']
+        dialog_messages.insert_one({'_id': message_id, 'dialog_id': dialog_id, 'sender': self.user['login'],
+                                    'content_for_sender': sender_filename,
+                                    'content_for_receiver': receiver_filename, 'content_type': 1,
+                                    'sender_file_id': sender_file_id, 'receiver_file_id': receiver_file_id})
+        messages_ids.update_one({'dialog_id': dialog_id}, {'$set': {'available_id': (message_id + 1)}})
+        self.client.sendall(bytes([0]))
 
     def start_dialog(self):
         self.client.sendall(bytes([0]))
@@ -250,7 +298,6 @@ class Session:
         self.client.sendall(encrypted)
 
     def send_message_to_chat(self):
-        print('entered sending messages')
         chats = self.database['ChatsInfo']
         chat_messages = self.database['ChatsMessages']
         messages_ids = self.database['ChatMessagesIds']
@@ -312,6 +359,54 @@ class Session:
 
         messages_to_send = pickle.dumps(messages_to_send)
         self.__send_big_data__(messages_to_send)
+
+    def get_chat_members(self):
+        chats = self.database['ChatsInfo']
+        self.client.sendall(bytes([0]))
+        chat_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        chat = chats.find_one({'_id': chat_id, 'persons': self.user['login']})
+        if chat is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        self.client.recv(SIZE)
+        members = chat['persons']
+        encrypted = rsa.encrypt(pickle.dumps(members), self.public_key)
+        self.client.sendall(encrypted)
+
+    def send_file_to_chat(self):
+        chats = self.database['ChatsInfo']
+        chat_messages = self.database['ChatsMessages']
+        messages_ids = self.database['ChatMessagesIds']
+        files = self.database['Files']
+        self.client.sendall(bytes([0]))
+        chat_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        chat = chats.find_one({'_id': chat_id, 'persons': self.user['login']})
+        if chat is None:
+            self.client.sendall(bytes([1]))
+            return
+        self.client.sendall(bytes([0]))
+        filename_nonce = self.client.recv(SIZE)
+        self.client.sendall(bytes([0]))
+        encrypted_filename = self.client.recv(SIZE)
+        self.client.sendall(bytes([0]))
+        file_nonce = self.client.recv(SIZE)
+        self.client.sendall(bytes([0]))
+        encrypted_file = self.__receive_big_data__()
+        file_info = files.insert_one({'file': encrypted_file, 'nonce': file_nonce})
+        message_id = messages_ids.find_one({'chat_id': chat_id})['available_id']
+        chat_messages.insert_one({'chat_id': chat_id, '_id': message_id, 'sender': self.user['login'],
+                                  'content': encrypted_filename, 'content_type': 1, 'nonce': filename_nonce,
+                                  'file_id': file_info.inserted_id})
+        messages_ids.update_one({'chat_id': chat_id}, {'$set': {'available_id': (message_id + 1)}})
+        self.client.sendall(bytes([0]))
+
+    def get_file(self):
+        files = self.database['Files']
+        self.client.sendall(bytes([0]))
+        file_id = ObjectId(self.client.recv(SIZE).decode('utf16'))
+        file = files.find_one({'_id': file_id})
+        self.__send_big_data__(pickle.dumps(file))
 
     def __receive_big_data__(self):
         data = bytearray()
