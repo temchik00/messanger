@@ -2,7 +2,6 @@ import socket
 import rsa
 import os
 import enum
-import json
 import pickle
 from Crypto.Cipher import AES
 import time
@@ -98,8 +97,8 @@ class Client:
     def get_all_dialogs(self):
         self.client_socket.sendall(bytes([Commands.get_dialogs.value]))
         encrypted_dialogs_info = self.client_socket.recv(SIZE)
-        dialogs_info = rsa.decrypt(encrypted_dialogs_info, self.private_key).decode('utf-16')
-        dialogs_info = json.loads(dialogs_info)
+        dialogs_info = rsa.decrypt(encrypted_dialogs_info, self.private_key)
+        dialogs_info = pickle.loads(dialogs_info)
         return dialogs_info
 
     def start_dialog(self, other_user):

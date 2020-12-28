@@ -2,7 +2,6 @@ import socket
 import threading
 import rsa
 import pymongo
-import json
 from bson import ObjectId
 import pickle
 from Crypto.Cipher import AES
@@ -282,7 +281,7 @@ class Session:
         for dialog in dialogs:
             dialog['_id'] = str(dialog['_id'])
             dialog_list.append(dict(dialog))
-        dialogs = json.dumps(dialog_list).encode("utf16")
+        dialogs = pickle.dumps(dialog_list)
         encrypted = rsa.encrypt(dialogs, self.public_key)
         self.client.sendall(encrypted)
 
